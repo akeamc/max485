@@ -1,22 +1,33 @@
 #![no_std]
-use core::fmt;
-use embedded_hal::{
-    digital::v2::OutputPin,
-    serial::{Read, Write},
-};
+use core::fmt::Debug;
+use embedded_hal::digital::OutputPin;
+use embedded_io_async::{ErrorType, Read, Write};
 
 /// Custom Error type
 #[derive(Debug)]
-pub enum Error {
-    PinError,
-    SerialError,
+pub enum Error<S: embedded_io_async::Error, P: Debug> {
+    Serial(S),
+    Pin(P),
+}
+
+impl<S, P> embedded_io_async::Error for Error<S, P>
+where
+    S: embedded_io_async::Error,
+    P: Debug,
+{
+    fn kind(&self) -> embedded_io_async::ErrorKind {
+        match self {
+            Error::Serial(s) => s.kind(),
+            Error::Pin(_) => embedded_io_async::ErrorKind::Other,
+        }
+    }
 }
 
 /// Represents the module itself Uses a normal serial port +  a pin
 /// to control wether the module is in read or write mode.
 pub struct Max485<RIDO, REDE>
 where
-    RIDO: Read<u8> + Write<u8>,
+    RIDO: Read + Write,
     REDE: OutputPin,
 {
     serial: RIDO,
@@ -25,7 +36,7 @@ where
 
 impl<RIDO, REDE> Max485<RIDO, REDE>
 where
-    RIDO: Read<u8> + Write<u8>,
+    RIDO: Read + Write,
     REDE: OutputPin,
 {
     pub fn new(serial: RIDO, pin: REDE) -> Self {
@@ -43,63 +54,34 @@ where
     }
 }
 
-impl<RIDO, REDE> fmt::Write for Max485<RIDO, REDE>
+impl<RIDO, REDE> ErrorType for Max485<RIDO, REDE>
 where
-    RIDO: Read<u8> + Write<u8>,
+    RIDO: Read + Write,
     REDE: OutputPin,
 {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let bytes = s.as_bytes();
-        self.pin.set_high().map_err(|_| fmt::Error)?;
-        for b in bytes {
-            nb::block!(self.serial.write(*b)).map_err(|_| fmt::Error)?;
-        }
-        self.pin.set_low().map_err(|_| fmt::Error)?;
-        Ok(())
+    type Error = crate::Error<RIDO::Error, REDE::Error>;
+}
+
+impl<RIDO, REDE> Write for Max485<RIDO, REDE>
+where
+    RIDO: Read + Write,
+    REDE: OutputPin,
+{
+    async fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error> {
+        self.pin.set_high().map_err(Error::Pin)?;
+        let n = self.serial.write(bytes).await.map_err(Error::Serial)?;
+        self.pin.set_low().map_err(Error::Pin)?;
+        Ok(n)
     }
 }
 
-impl<RIDO, REDE> Write<u8> for Max485<RIDO, REDE>
+impl<RIDO, REDE> Read for Max485<RIDO, REDE>
 where
-    RIDO: Read<u8> + Write<u8>,
+    RIDO: Read + Write,
     REDE: OutputPin,
 {
-    type Error = crate::Error;
-
-    fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
-        self.pin.set_high().map_err(|_| Error::PinError)?;
-        self.serial.write(word).map_err(|err|match err{
-            nb::Error::Other(_) => nb::Error::Other(Error::SerialError),
-            nb::Error::WouldBlock => nb::Error::WouldBlock,
-        })?;
-        self.pin.set_low().map_err(|_| Error::PinError)?;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> nb::Result<(), Self::Error> {
-        self.pin.set_high().map_err(|_| Error::PinError)?;
-        self.serial.flush().map_err(|err|match err{
-            nb::Error::Other(_) => nb::Error::Other(Error::SerialError),
-            nb::Error::WouldBlock => nb::Error::WouldBlock,
-        })?;
-        self.pin.set_low().map_err(|_| Error::PinError)?;
-        Ok(())
-    }
-}
-
-impl<RIDO, REDE> Read<u8> for Max485<RIDO, REDE>
-where
-    RIDO: Read<u8> + Write<u8>,
-    REDE: OutputPin,
-{
-    type Error = crate::Error;
-
-    fn read(&mut self) -> nb::Result<u8, Self::Error> {
-        //assert pin is low
-        self.pin.set_low().map_err(|_| Error::PinError)?;
-        self.serial.read(). map_err(|err|match err{
-            nb::Error::Other(_) => nb::Error::Other(Error::SerialError),
-            nb::Error::WouldBlock => nb::Error::WouldBlock,
-        })
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.pin.set_low().map_err(Error::Pin)?;
+        self.serial.read(buf).await.map_err(Error::Serial)
     }
 }
