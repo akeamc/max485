@@ -69,8 +69,12 @@ where
 {
     async fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error> {
         self.pin.set_high().map_err(Error::Pin)?;
+
         let n = self.serial.write(bytes).await.map_err(Error::Serial)?;
+        self.serial.flush().await.map_err(Error::Serial)?;
+
         self.pin.set_low().map_err(Error::Pin)?;
+
         Ok(n)
     }
 }
