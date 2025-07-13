@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::Debug;
 use embedded_hal::digital::OutputPin;
-use embedded_io_async::{ErrorType, Read, Write};
+use embedded_io_async::{ErrorType, Read, ReadReady, Write, WriteReady};
 
 /// Custom Error type
 #[derive(Debug)]
@@ -87,5 +87,25 @@ where
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         self.pin.set_low().map_err(Error::Pin)?;
         self.serial.read(buf).await.map_err(Error::Serial)
+    }
+}
+
+impl<RIDO, REDE> ReadReady for Max485<RIDO, REDE>
+where
+    RIDO: Read + Write + ReadReady,
+    REDE: OutputPin,
+{
+    fn read_ready(&mut self) -> Result<bool, Self::Error> {
+        self.serial.read_ready().map_err(Error::Serial)
+    }
+}
+
+impl<RIDO, REDE> WriteReady for Max485<RIDO, REDE>
+where
+    RIDO: Read + Write + WriteReady,
+    REDE: OutputPin,
+{
+    fn write_ready(&mut self) -> Result<bool, Self::Error> {
+        self.serial.write_ready().map_err(Error::Serial)
     }
 }
